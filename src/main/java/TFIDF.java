@@ -14,6 +14,8 @@ import org.apache.hadoop.mapreduce.lib.partition.HashPartitioner;
 import org.apache.hadoop.util.GenericOptionsParser;
 
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.StringTokenizer;
 
 /*
@@ -34,7 +36,7 @@ public class TFIDF {
             StringTokenizer itr = new StringTokenizer(value.toString());
             while(itr.hasMoreTokens()){
                 Text sendKey = new Text();
-                sendKey.set(author + "#"  + itr.nextToken() + "#" + fileName);
+                sendKey.set( itr.nextToken() + "#" + author  + "#" + fileName);
                 context.write(sendKey, new IntWritable(1));
             }
         }
@@ -43,7 +45,7 @@ public class TFIDF {
     public static class TFIDFPartitioner extends HashPartitioner<Text, IntWritable>{
         @Override
         public int getPartition(Text key, IntWritable value, int numReduceTasks) {
-            String splitKey = key.toString().split("#")[1];
+            String splitKey = key.toString().split("#")[0];
             return super.getPartition(new Text(splitKey), value, numReduceTasks);
         }
     }
@@ -51,11 +53,12 @@ public class TFIDF {
     public static class TFIDFReducer extends Reducer<Text, IntWritable, Text, Text>{
         private String curWord = "";
         private String curAuthor = "";
-        private String curDoc = "";
         private int totalDocNum;
 
         private int sumDoc;
         private int sumWord;
+
+        private List<String> tmp = new ArrayList<>();
         @Override
         protected void setup(Context context) throws IOException, InterruptedException {
             totalDocNum = Integer.parseInt(context.getConfiguration().get("totalDocNum"));
@@ -64,35 +67,43 @@ public class TFIDF {
 
         @Override
         protected void reduce(Text key, Iterable<IntWritable> values, Context context) throws IOException, InterruptedException {
-            String author = key.toString().split("#")[0];
-            String word = key.toString().split("#")[1];
-            String doc = key.toString().split("#")[2];
+            String word = key.toString().split("#")[0];
+            String author = key.toString().split("#")[1];
             int sum = 0;
             for(IntWritable value: values){
                 sum += value.get();
             }
-            if (!curWord.equals(word) && !curWord.isEmpty()||
-                    !curAuthor.equals(author) && !curAuthor.isEmpty()){
-                cleanup(context);
+            if (!curAuthor.equals(author) && !curAuthor.isEmpty()|| !curWord.equals(word) && !curWord.isEmpty()){
+                authorChanged();
+            }
+            if (!curWord.equals(word) && !curWord.isEmpty()){
+                wordChanged(context);
             }
             curWord = word;
             curAuthor = author;
-            curDoc = doc;
             sumDoc++;
             sumWord += sum;
-            super.reduce(key, values, context);
         }
 
+        private void authorChanged(){
+            int tf = sumWord;
+            String info = curAuthor + ", " + curWord + ", " + "tf:" + tf + ", ";
+            tmp.add(info);
+            sumWord = 0;
+        }
+
+        private void wordChanged(Context context) throws IOException, InterruptedException {
+            double idf = Math.log(totalDocNum * 1.0/ (sumDoc + 1));
+            for(String str: tmp){
+                context.write(new Text(str + "idf:" + idf), new Text());
+            }
+            tmp.clear();
+            sumDoc = 0;
+        }
         @Override
         protected void cleanup(Context context) throws IOException, InterruptedException {
-            int tf = sumWord;
-            double idf = Math.log(totalDocNum * 1.0/ (sumDoc + 1));
-            context.write(new Text(curAuthor + ", " + curWord + ','),
-                    new Text("tf:" + tf + " idf:" + idf));
-            sumWord = 0;
-            sumDoc = 0;
-            curDoc = "";
-            curAuthor = "";
+            authorChanged();
+            wordChanged(context);
         }
     }
 
